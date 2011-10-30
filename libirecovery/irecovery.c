@@ -25,6 +25,11 @@
 #include <libirecovery.h>
 #include <readline/readline.h>
 #include <readline/history.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #define FILE_HISTORY_PATH ".irecovery"
 #define debug(...) if(verbose) fprintf(stderr, __VA_ARGS__)
@@ -248,6 +253,49 @@ void print_progress_bar(double progress) {
 	}
 }
 
+static int create_client_socket()
+{
+    int sock = socket(PF_INET, SOCK_STREAM, 0);
+    if (sock == -1)
+        return -1;
+    
+    return sock;
+}
+
+static int try_connect(int sock, const char *ip, int port)
+{
+    struct sockaddr_in server;
+    int success;
+    
+    server.sin_family = AF_INET;
+    server.sin_port = htons(port);
+    
+    success = inet_aton(ip, &(server.sin_addr));
+    if (!success)
+        return -1;
+    
+    return connect(sock,
+                   (struct sockaddr *)&server,
+                   sizeof server);
+}
+
+static int connect_or_die(const char *ip, int port)
+{
+    int sock = create_client_socket();
+    
+    if (sock == -1) {
+        fprintf(stderr, "Error! Failed to create a client socket: %s\n", ip);
+        exit(1);
+	}
+    
+    if (try_connect(sock, ip, port) == -1) {
+        fprintf(stderr, "Error! Failed to connect to a server at: %s\n", ip);
+        exit(1);
+    }
+    
+    return sock;
+}
+
 void print_usage() {
 	printf("iRecovery - iDevice Recovery Utility\n");
 	printf("Usage: ./irecovery [args]\n");
@@ -259,7 +307,9 @@ void print_usage() {
 	printf("\t-r\t\tReset client.\n");
 	printf("\t-s\t\tStart interactive shell.\n");
 	printf("\t-e <script>\tExecutes recovery shell script.\n");
-	exit(1);
+    printf("\t-i <ip>\t\tRemote IP address\n");
+	printf("\t-p <port>\tRemote port number\n");
+    exit(1);
 }
 
 int main(int argc, char* argv[]) {
@@ -267,9 +317,12 @@ int main(int argc, char* argv[]) {
 	int opt = 0;
 	int action = 0;
 	char* argument = NULL;
+	char* host = NULL;
+    int port = -1, sock = -1;
+	irecv_usage_context usage_ctx = IRECV_CTX_LOCAL;
 	irecv_error_t error = 0;
 	if (argc == 1) print_usage();
-	while ((opt = getopt(argc, argv, "vhrsc:f:e:k::")) > 0) {
+	while ((opt = getopt(argc, argv, "vhrsc:f:e:k:i:p::")) > 0) {
 		switch (opt) {
 		case 'v':
 			verbose += 1;
@@ -300,11 +353,21 @@ int main(int argc, char* argv[]) {
 		case 'k':
 			action = kSendExploit;
 			argument = optarg;
-			break;
-
+            break;
+				
 		case 'e':
 			action = kSendScript;
 			argument = optarg;
+			break;
+				
+		case 'i':
+			usage_ctx = IRECV_CTX_REMOTE;
+			host = optarg;
+			break;
+				
+		case 'p':
+			usage_ctx = IRECV_CTX_REMOTE;
+			sscanf(optarg, "%d", &port);
 			break;
 
 		default:
@@ -314,8 +377,12 @@ int main(int argc, char* argv[]) {
 	}
 
 	if (verbose) irecv_set_debug_level(verbose);
+	
+	if (usage_ctx == IRECV_CTX_REMOTE) {
+		sock = connect_or_die(host, port);
+	}
 
-	irecv_init();
+	irecv_init(usage_ctx, sock);
 	irecv_client_t client = NULL;
 	for (i = 0; i <= 5; i++) {
 		debug("Attempting to connect... \n");
@@ -326,6 +393,7 @@ int main(int argc, char* argv[]) {
 			break;
 
 		if (i == 5) {
+			irecv_exit();
 			return -1;
 		}
 	}
@@ -376,6 +444,7 @@ int main(int argc, char* argv[]) {
 	}
 
 	irecv_close(client);
+	irecv_exit();
 	return 0;
 }
 

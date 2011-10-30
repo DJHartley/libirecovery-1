@@ -5,7 +5,7 @@ CC := gcc
 UNAME := $(shell uname -s)
 
 ifeq ($(UNAME),Darwin)
-		CFLAGS = -I./include -I/usr/local/include -I/opt/local/include
+		CFLAGS = -I../libusbip/libusbip -I./include -I/usr/local/include -I/opt/local/include -I./include/libusb-1.0
 		LDFLAGS = -L/usr/lib -L/opt/local/lib 
 		LIBS = -lreadline -lusb-1.0 -framework CoreFoundation -framework IOKit
 	
@@ -50,7 +50,7 @@ else
 		LIBIRECOVERY_SHARED_LDFLAGS = $(LDFLAGS)
 		LIBIRECOVERY_SHARED_LIBS = $(LIBS)
 	else
-		CFLAGS = -O3 -I./include -I/usr/include -I/usr/local/include
+		CFLAGS = -O3 -I../libusbip/libusbip -I./include -I/usr/include -I/usr/local/include -I./include/libusb-1.0
 		LDFLAGS = -L/usr/lib -L/usr/local/lib
 		LIBS = -lusb-1.0 -lreadline
 		
@@ -74,8 +74,8 @@ else
 	endif
 endif
 
-LIBIRECOVERY_OBJECTS = libirecovery.o
-IRECOVERY_OBJECTS = irecovery.o libirecovery.a
+LIBIRECOVERY_OBJECTS = libirecovery.o ../libusbip/libusbip/libusbip.a
+IRECOVERY_OBJECTS = irecovery.o libirecovery.a ../libusbip/libusbip/libusbip.a
 
 TARGETS = $(LIBIRECOVERY_STATIC_TARGET) $(IRECOVERY_TARGET)
 OBJECTS = libirecovery.o irecovery.o

@@ -25,6 +25,7 @@
 
 #ifndef WIN32
 #include <libusb-1.0/libusb.h>
+#include <libusbi.h>
 #else
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -33,12 +34,18 @@
 
 #include "libirecovery.h"
 
+#include "libusbip.h"
+
 #define BUFFER_SIZE 0x1000
 #define debug(...) if(libirecovery_debug) fprintf(stderr, __VA_ARGS__)
 
 static int libirecovery_debug = 0;
 #ifndef WIN32
 static libusb_context* libirecovery_context = NULL;
+static irecv_usage_context libirecovery_usage_context = IRECV_CTX_LOCAL;
+static struct libusbip_connection_info libirecovery_connection_info;
+static struct libusbip_device_list libirecovery_device_list;
+static struct libusbip_device_handle libirecovery_device_handle;
 #endif
 
 int irecv_write_file(const char* filename, const void* data, size_t size);
@@ -184,16 +191,18 @@ int check_context(irecv_client_t client) {
 	return IRECV_E_SUCCESS;
 }
 
-void irecv_init() {
+void irecv_init(irecv_usage_context context, int sock) {
 #ifndef WIN32
-	libusb_init(&libirecovery_context);
+    libirecovery_usage_context = context;
+    irecv_usb_init(&libirecovery_context, sock);
 #endif
 }
 
 void irecv_exit() {
 #ifndef WIN32
-	if (libirecovery_context != NULL) {
-		libusb_exit(libirecovery_context);
+	if (libirecovery_context != NULL
+     || libirecovery_usage_context == IRECV_CTX_REMOTE) {
+		irecv_usb_exit(libirecovery_context);
 		libirecovery_context = NULL;
 	}
 #endif
@@ -212,7 +221,7 @@ int irecv_control_transfer( irecv_client_t client,
 							uint16_t wLength,
 							unsigned int timeout) {
 #ifndef WIN32
-	return libusb_control_transfer(client->handle, bmRequestType, bRequest, wValue, wIndex, data, wLength, timeout);
+	return irecv_usb_control_transfer(client->handle, bmRequestType, bRequest, wValue, wIndex, data, wLength, timeout);
 #else
 	DWORD count = 0;
 	DWORD ret;
@@ -264,9 +273,9 @@ int irecv_bulk_transfer(irecv_client_t client,
 	int ret;
 
 #ifndef WIN32
-	ret = libusb_bulk_transfer(client->handle, endpoint, data, length, transferred, timeout);
+	ret = irecv_usb_bulk_transfer(client->handle, endpoint, data, length, transferred, timeout);
 	if (ret < 0) {
-		libusb_clear_halt(client->handle, endpoint);
+		irecv_usb_clear_halt(client->handle, endpoint);
 	}
 #else
 	if (endpoint==0x4) {
@@ -282,7 +291,7 @@ int irecv_bulk_transfer(irecv_client_t client,
 
 int irecv_get_string_descriptor_ascii(irecv_client_t client, uint8_t desc_index, unsigned char * buffer, int size) {
 #ifndef WIN32
-	return libusb_get_string_descriptor_ascii(client->handle, desc_index, buffer, size);
+	return irecv_usb_get_string_descriptor_ascii(client->handle, desc_index, buffer, size);
 #else
 	irecv_error_t ret;
 	unsigned short langid = 0;
@@ -326,10 +335,10 @@ irecv_error_t irecv_open(irecv_client_t* pclient) {
 	}
 
 	irecv_error_t error = IRECV_E_SUCCESS;
-	int usb_device_count = libusb_get_device_list(libirecovery_context, &usb_device_list);
+	int usb_device_count = irecv_usb_get_device_list(libirecovery_context, &usb_device_list);
 	for (i = 0; i < usb_device_count; i++) {
 		usb_device = usb_device_list[i];
-		libusb_get_device_descriptor(usb_device, &usb_descriptor);
+		irecv_usb_get_device_descriptor(usb_device, &usb_descriptor);
 		if (usb_descriptor.idVendor == APPLE_VENDOR_ID) {
 			/* verify this device is in a mode we understand */
 			if (usb_descriptor.idProduct == kRecoveryMode1 ||
@@ -340,19 +349,19 @@ irecv_error_t irecv_open(irecv_client_t* pclient) {
 
 				debug("opening device %04x:%04x...\n", usb_descriptor.idVendor, usb_descriptor.idProduct);
 
-				libusb_open(usb_device, &usb_handle);
+				irecv_usb_open(usb_device, &usb_handle);
 				if (usb_handle == NULL) {
-					libusb_free_device_list(usb_device_list, 1);
-					libusb_close(usb_handle);
-					libusb_exit(libirecovery_context);
+					irecv_usb_free_device_list(usb_device_list, 1);
+					irecv_usb_close(usb_handle);
+					irecv_usb_exit(libirecovery_context);
 					return IRECV_E_UNABLE_TO_CONNECT;
 				}
-				libusb_free_device_list(usb_device_list, 1);
+				irecv_usb_free_device_list(usb_device_list, 1);
 
 				irecv_client_t client = (irecv_client_t) malloc(sizeof(struct irecv_client));
 				if (client == NULL) {
-					libusb_close(usb_handle);
-					libusb_exit(libirecovery_context);
+					irecv_usb_close(usb_handle);
+					irecv_usb_exit(libirecovery_context);
 					return IRECV_E_OUT_OF_MEMORY;
 				}
 
@@ -404,9 +413,9 @@ irecv_error_t irecv_set_configuration(irecv_client_t client, int configuration) 
 	debug("Setting to configuration %d\n", configuration);
 
 	int current = 0;
-	libusb_get_configuration(client->handle, &current);
+	irecv_usb_get_configuration(client->handle, &current);
 	if (current != configuration) {
-		if (libusb_set_configuration(client->handle, configuration) < 0) {
+		if (irecv_usb_set_configuration(client->handle, configuration) < 0) {
 			return IRECV_E_USB_CONFIGURATION;
 		}
 	}
@@ -425,11 +434,11 @@ irecv_error_t irecv_set_interface(irecv_client_t client, int interface, int alt_
 	//libusb_release_interface(client->handle, client->interface);
 
 	debug("Setting to interface %d:%d\n", interface, alt_interface);
-	if (libusb_claim_interface(client->handle, interface) < 0) {
+	if (irecv_usb_claim_interface(client->handle, interface) < 0) {
 		return IRECV_E_USB_INTERFACE;
 	}
 
-	if (libusb_set_interface_alt_setting(client->handle, interface, alt_interface) < 0) {
+	if (irecv_usb_set_interface_alt_setting(client->handle, interface, alt_interface) < 0) {
 		return IRECV_E_USB_INTERFACE;
 	}
 
@@ -444,7 +453,7 @@ irecv_error_t irecv_reset(irecv_client_t client) {
 	if (check_context(client) != IRECV_E_SUCCESS) return IRECV_E_NO_DEVICE;
 	
 #ifndef WIN32
-	libusb_reset_device(client->handle);
+	irecv_usb_reset_device(client->handle);
 #else
 	int ret;
 	DWORD count;
@@ -542,9 +551,9 @@ irecv_error_t irecv_close(irecv_client_t client) {
 #ifndef WIN32
 		if (client->handle != NULL) {
 			if (client->mode != kDfuMode) {
-				libusb_release_interface(client->handle, client->interface);
+				irecv_usb_release_interface(client->handle, client->interface);
 			}
-			libusb_close(client->handle);
+			irecv_usb_close(client->handle);
 			client->handle = NULL;
 		}
 #else
@@ -1290,4 +1299,356 @@ void irecv_hexdump(unsigned char* buf, unsigned int len, unsigned int addr) {
 		}
 	}
 	printf("\n");
+}
+
+int irecv_usb_init(libusb_context **context, int sock) {
+    if (libirecovery_usage_context == IRECV_CTX_LOCAL) {
+        return libusb_init(context);
+    }
+    
+    bzero(&libirecovery_device_list, sizeof(struct libusbip_device_list));
+    
+    libirecovery_connection_info.ctx = LIBUSBIP_CTX_CLIENT;
+    libirecovery_connection_info.server_sock = sock;
+    
+    return libusbip_init(&libirecovery_connection_info);
+}
+
+void irecv_usb_exit(libusb_context *context) {
+    if (libirecovery_usage_context == IRECV_CTX_LOCAL) {
+        libusb_exit(context);
+        return;
+    }
+    
+    libusbip_exit(&libirecovery_connection_info);
+}
+
+int irecv_usb_get_device_list(libusb_context *context,
+                              libusb_device ***usb_device_list) {
+    struct libusb_device **ret;
+    ssize_t len;
+    size_t i;
+    
+    if (libirecovery_usage_context == IRECV_CTX_LOCAL) {
+        return libusb_get_device_list(context, usb_device_list);
+    }
+    
+    libusbip_get_device_list(&libirecovery_connection_info,
+                             &libirecovery_device_list);
+    
+    len = libirecovery_device_list.n_devices;
+    ret = malloc(sizeof(void *) * (len + 1));
+    if (!ret) {
+        return -1;
+    }
+    
+    ret[len] = NULL;
+    for (i = 0; i < len; i++) {
+        libusb_device *dev
+        = malloc(sizeof(struct libusb_device));
+        if (!dev) {
+            free(ret);
+            return -1;
+        }
+        
+        struct libusbip_device *idev = &libirecovery_device_list.devices[i];
+        dev->bus_number = idev->bus_number;
+        dev->device_address = idev->device_address;
+        dev->num_configurations = idev->num_configurations;
+        dev->session_data = idev->session_data;
+        ret[i] = dev;
+    }
+    *usb_device_list = ret;
+    return len;
+}
+
+void irecv_usb_free_device_list(libusb_device **usb_device_list, int flag) {
+    ssize_t len;
+    size_t i;
+    
+    if (libirecovery_usage_context == IRECV_CTX_LOCAL) {
+        libusb_free_device_list(usb_device_list, flag);
+        return;
+    }
+    
+    len = libirecovery_device_list.n_devices;
+    for (i = 0; i < len; i++) {
+        free(usb_device_list[i]);
+    }
+    
+    free(usb_device_list);
+    
+}
+
+void irecv_usb_get_device_descriptor(libusb_device *usb_device,
+                                     struct libusb_device_descriptor *usb_descriptor) {
+    libusbip_error_t error = LIBUSBIP_E_SUCCESS;
+    struct libusbip_device *found = NULL;
+    struct libusbip_device_descriptor dd;
+    uint32_t session_data;
+    ssize_t len;
+    size_t i;
+    
+    if (libirecovery_usage_context == IRECV_CTX_LOCAL) {
+        libusb_get_device_descriptor(usb_device, usb_descriptor);
+        return;
+    }
+    
+    len = libirecovery_device_list.n_devices;
+    session_data = usb_device->session_data;
+    for (i = 0; i < len; i++) {
+        struct libusbip_device *idev
+        = &libirecovery_device_list.devices[i];
+        if (idev->session_data == session_data) {
+            found = idev;
+            break;
+        }
+    }
+    
+    if (!found) {
+        debug("device not found\n");
+        return;
+    }
+
+    bzero(&dd, sizeof(struct libusbip_device_descriptor));
+    error = libusbip_get_device_descriptor(&libirecovery_connection_info,
+                                           found, &dd);
+    if (error < 0) {
+        debug("libusbip_get_device_descriptor failed\n");
+        return;
+    }
+    
+    usb_descriptor->bLength = dd.bLength;
+    usb_descriptor->bDescriptorType = dd.bDescriptorType;
+    usb_descriptor->bcdUSB = dd.bcdUSB;
+    usb_descriptor->bDeviceClass = dd.bDeviceClass;
+    usb_descriptor->bDeviceSubClass = dd.bDeviceSubClass;
+    usb_descriptor->bDeviceProtocol = dd.bDeviceProtocol;
+    usb_descriptor->bMaxPacketSize0 = dd.bMaxPacketSize0;
+    usb_descriptor->idVendor = dd.idVendor;
+    usb_descriptor->idProduct = dd.idProduct;
+    usb_descriptor->bcdDevice = dd.bcdDevice;
+    usb_descriptor->iManufacturer = dd.iManufacturer;
+    usb_descriptor->iProduct = dd.iProduct;
+    usb_descriptor->iSerialNumber = dd.iSerialNumber;
+    usb_descriptor->bNumConfigurations = dd.bNumConfigurations;
+}
+
+void irecv_usb_open(libusb_device *usb_device,
+                    libusb_device_handle **usb_handle) {
+    libusbip_error_t error = LIBUSBIP_E_SUCCESS;
+    struct libusbip_device *found = NULL;
+    uint32_t session_data;
+    ssize_t len;
+    size_t i;
+    
+    if (libirecovery_usage_context == IRECV_CTX_LOCAL) {
+        libusb_open(usb_device, usb_handle);
+        return;
+    }
+    
+    len = libirecovery_device_list.n_devices;
+    session_data = usb_device->session_data;
+    for (i = 0; i < len; i++) {
+        struct libusbip_device *idev
+        = &libirecovery_device_list.devices[i];
+        if (idev->session_data == session_data) {
+            found = idev;
+            break;
+        }
+    }
+    
+    if (!found) {
+        debug("device not found\n");
+        return;
+    }
+    
+    error = libusbip_open(&libirecovery_connection_info,
+                          found, &libirecovery_device_handle);
+    if (error < 0) {
+        debug("libusbip_open failed\n");
+        return;
+    }
+    
+    *usb_handle = (void *)0xffff; // Pseudo address
+}
+
+void irecv_usb_close(libusb_device_handle *usb_handle) {
+    if (libirecovery_usage_context == IRECV_CTX_LOCAL) {
+        libusb_close(usb_handle);
+        return;
+    }
+    
+    libusbip_close(&libirecovery_connection_info,
+                   &libirecovery_device_handle);
+}
+
+void irecv_usb_get_configuration(libusb_device_handle *usb_handle, int *config) {
+    libusbip_error_t error = LIBUSBIP_E_SUCCESS;
+    
+    if (libirecovery_usage_context == IRECV_CTX_LOCAL) {
+        libusb_get_configuration(usb_handle, config);
+        return;
+    }
+
+    error =
+    libusbip_get_configuration(&libirecovery_connection_info,
+                               &libirecovery_device_handle, config);
+    if (error < 0) {
+        debug("libusbip_get_configuration failed\n");
+    }
+}
+
+int irecv_usb_set_configuration(libusb_device_handle *usb_handle, int config) {
+    libusbip_error_t error = LIBUSBIP_E_SUCCESS;
+    
+    if (libirecovery_usage_context == IRECV_CTX_LOCAL) {
+        libusb_set_configuration(usb_handle, config);
+        return;
+    }
+    libusbip_set_configuration(&libirecovery_connection_info,
+                               &libirecovery_device_handle, config);
+    if (error < 0) {
+        debug("libusbip_set_configuration failed\n");
+    }
+}
+
+int irecv_usb_claim_interface(libusb_device_handle *usb_handle, int interface) {
+    libusbip_error_t error = LIBUSBIP_E_SUCCESS;
+    if (libirecovery_usage_context == IRECV_CTX_LOCAL) {
+        return libusb_claim_interface(usb_handle, interface);
+    }
+    
+    error = libusbip_claim_interface(&libirecovery_connection_info,
+                                     &libirecovery_device_handle, interface);
+    if (error < 0) {
+        debug("libusbip_claim_interface failed\n");
+    }
+    
+    return error;
+}
+
+void irecv_usb_release_interface(libusb_device_handle *usb_handle, int interface) {
+    libusbip_error_t error = LIBUSBIP_E_SUCCESS;
+
+    if (libirecovery_usage_context == IRECV_CTX_LOCAL) {
+        libusb_release_interface(usb_handle, interface);
+        return;
+    }
+    
+    error = libusbip_release_interface(&libirecovery_connection_info,
+                                       &libirecovery_device_handle, interface);
+    if (error < 0) {
+        debug("libusbip_release_interface failed\n");
+    }
+}
+
+int irecv_usb_set_interface_alt_setting(libusb_device_handle *usb_handle,
+                                        int interface, int alt_interface) {
+    libusbip_error_t error = LIBUSBIP_E_SUCCESS;
+    
+    if (libirecovery_usage_context == IRECV_CTX_LOCAL) {
+        return libusb_set_interface_alt_setting(usb_handle, interface, alt_interface);
+    }
+    
+    error = libusbip_set_interface_alt_setting(&libirecovery_connection_info,
+                                               &libirecovery_device_handle,
+                                               interface, alt_interface);
+    if (error < 0) {
+        debug("irecv_usb_set_interface_alt_setting failed\n");
+    }
+    
+    return error;
+}
+
+void irecv_usb_reset_device(libusb_device_handle *usb_handle) {
+    libusbip_error_t error = LIBUSBIP_E_SUCCESS;
+    
+    if (libirecovery_usage_context == IRECV_CTX_LOCAL) {
+        libusb_reset_device(usb_handle);
+        return;
+    }
+    
+    error = libusbip_reset_device(&libirecovery_connection_info,
+                                  &libirecovery_device_handle);
+    if (error < 0) {
+        debug("libusbip_reset_device failed\n");
+    }
+}
+
+void irecv_usb_clear_halt(libusb_device_handle *usb_handle, unsigned char endpoint) {
+    libusbip_error_t error = LIBUSBIP_E_SUCCESS;
+
+    if (libirecovery_usage_context == IRECV_CTX_LOCAL) {
+        libusb_clear_halt(usb_handle, endpoint);
+        return;
+    }
+    
+    error = libusbip_clear_halt(&libirecovery_connection_info,
+                                &libirecovery_device_handle, endpoint);
+    if (error < 0) {
+        debug("libusbip_clear_halt failed\n");
+    }
+}
+
+int irecv_usb_get_string_descriptor_ascii(libusb_device_handle *usb_handle,
+                                          uint8_t desc_index, unsigned char *buffer,
+                                          int size) {
+    int bytes;
+    
+    if (libirecovery_usage_context == IRECV_CTX_LOCAL) {
+        return libusb_get_string_descriptor_ascii(usb_handle, desc_index, buffer, size);
+    }
+    
+    bytes = libusbip_get_string_descriptor_ascii(&libirecovery_connection_info,
+                                                 &libirecovery_device_handle,
+                                                 desc_index, buffer, size);
+    if (bytes < 0) {
+        debug("libusbip_get_string_descriptor_ascii failed\n");
+    }
+    
+    return bytes;
+}
+
+int irecv_usb_control_transfer(libusb_device_handle *usb_handle,
+                               uint8_t bmRequestType,
+                               uint8_t bRequest,
+                               uint16_t wValue,
+                               uint16_t wIndex,
+                               unsigned char *data,
+                               uint16_t wLength,
+                               unsigned int timeout) {    
+    if (libirecovery_usage_context == IRECV_CTX_LOCAL) {
+        return libusb_control_transfer(usb_handle,
+                                       bmRequestType,
+                                       bRequest,
+                                       wValue,
+                                       wIndex,
+                                       data,
+                                       wLength,
+                                       timeout);
+    }
+    
+    return libusbip_control_transfer(&libirecovery_connection_info,
+                                     &libirecovery_device_handle,
+                                     bmRequestType,
+                                     bRequest,
+                                     wValue, wIndex, data, wLength, timeout);
+}
+
+int irecv_usb_bulk_transfer(libusb_device_handle *usb_handle,
+                            unsigned char endpoint,
+                            unsigned char *data,
+                            int length,
+                            int *transferred,
+                            unsigned int timeout) {
+    if (libirecovery_usage_context == IRECV_CTX_LOCAL) {
+        return libusb_bulk_transfer(usb_handle, endpoint, data, length,
+                                    transferred,
+                                    timeout);
+    }
+
+    return libusbip_bulk_transfer(&libirecovery_connection_info,
+                                  &libirecovery_device_handle,
+                                  endpoint, data, length, transferred, timeout);
 }

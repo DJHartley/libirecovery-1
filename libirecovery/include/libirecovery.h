@@ -105,6 +105,11 @@ typedef enum {
 	IRECV_DISCONNECTED = 5,
 	IRECV_PROGRESS = 6
 } irecv_event_type;
+    
+typedef enum {
+    IRECV_CTX_LOCAL,
+    IRECV_CTX_REMOTE
+} irecv_usage_context;
 
 typedef struct {
 	int size;
@@ -208,7 +213,7 @@ irecv_error_t irecv_get_bdid(irecv_client_t client, unsigned int* bdid);
 irecv_error_t irecv_get_ecid(irecv_client_t client, unsigned long long* ecid);
 void irecv_hexdump(unsigned char* buf, unsigned int len, unsigned int addr);
 
-void irecv_init();
+void irecv_init(irecv_usage_context context, int sock);
 void irecv_exit();
 irecv_client_t irecv_reconnect(irecv_client_t client, int initial_pause);
 irecv_error_t irecv_reset_counters(irecv_client_t client);
@@ -216,6 +221,24 @@ irecv_error_t irecv_finish_transfer(irecv_client_t client);
 irecv_error_t irecv_recv_buffer(irecv_client_t client, char* buffer, unsigned long length);
 irecv_error_t irecv_get_device(irecv_client_t client, irecv_device_t* device);
 
+int irecv_usb_init(libusb_context **context, int sock);
+void irecv_usb_exit(libusb_context *context);
+int irecv_usb_get_device_list(libusb_context *context, libusb_device ***usb_device_list);
+void irecv_usb_free_device_list(libusb_device **usb_device_list, int flag);
+void irecv_usb_get_device_descriptor(libusb_device *usb_device, struct libusb_device_descriptor *usb_descriptor);
+void irecv_usb_open(libusb_device *usb_device, libusb_device_handle **usb_handle);
+void irecv_usb_close(libusb_device_handle *usb_handle);
+void irecv_usb_get_configuration(libusb_device_handle *usb_handle, int *config);
+int irecv_usb_set_configuration(libusb_device_handle *usb_handle, int config);
+int irecv_usb_claim_interface(libusb_device_handle *usb_handle, int interface);
+void irecv_usb_release_interface(libusb_device_handle *usb_handle, int interface);
+int irecv_usb_set_interface_alt_setting(libusb_device_handle *usb_handle, int interface, int alt_interface);
+void irecv_usb_reset_device(libusb_device_handle *usb_handle);
+void irecv_usb_clear_halt(libusb_device_handle *usb_handle, unsigned char endpoint);
+int irecv_usb_get_string_descriptor_ascii(libusb_device_handle *usb_handle, uint8_t desc_index, unsigned char *buffer, int size);
+int irecv_usb_control_transfer(libusb_device_handle *usb_handle, uint8_t bmRequestType, uint8_t bRequest, uint16_t wValue, uint16_t wIndex, unsigned char *data, uint16_t wLength, unsigned int timeout);
+int irecv_usb_bulk_transfer(libusb_device_handle *usb_handle, unsigned char endpoint, unsigned char *data, int length, int *transferred, unsigned int timeout);
+    
 #ifdef __cplusplus
 }
 #endif
