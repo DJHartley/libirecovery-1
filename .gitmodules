@@ -1,3 +1,0 @@
-[submodule "libusbip"]
-	path = libusbip
-	url = git://github.com/forensix/libusbip.git
